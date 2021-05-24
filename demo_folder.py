@@ -3,6 +3,7 @@ import sys
 import time
 import argparse
 from PIL import Image
+from pathlib import Path
 import numpy as np
 import cv2
 
@@ -35,13 +36,17 @@ net.eval()
 print('Net restored.')
 
 # get data
-data_dir = args.demo_folder
-images = os.listdir(data_dir)
+data_dir = Path(args.demo_folder)
+save_dir = Path(args.save_dir)
+images = sorted(data_dir.glob('**/fake*.png'))
+if len(images) == 0:
+    images = sorted(data_dir.glob('**/*.png'))
+if 'kitti' in args.snapshot:
+    images = sorted(filter(lambda x: 'image_03' in str(x), images))
 if len(images) == 0:
     print('There are no images at directory %s. Check the data path.' % (data_dir))
 else:
     print('There are %d images to be processed.' % (len(images)))
-images.sort()
 
 mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 img_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*mean_std)])
@@ -49,9 +54,8 @@ if not os.path.exists(args.save_dir):
     os.makedirs(args.save_dir)
 
 start_time = time.time()
-for img_id, img_name in enumerate(images):
-    img_dir = os.path.join(data_dir, img_name)
-    img = Image.open(img_dir).convert('RGB')
+for img_id, img_path in enumerate(images):
+    img = Image.open(img_path).convert('RGB')
     img_tensor = img_transform(img)
 
     # predict
@@ -62,23 +66,18 @@ for img_id, img_name in enumerate(images):
     pred = pred.cpu().numpy().squeeze()
     pred = np.argmax(pred, axis=0)
 
+    img_name = img_path.name
     color_name = 'color_mask_' + img_name
     overlap_name = 'overlap_' + img_name
     pred_name = 'pred_mask_' + img_name
 
+    color_path = save_dir.joinpath(*img_path.parts[img_path.parts.index(data_dir.name)+1:-1], color_name)
+    color_path.parent.mkdir(parents=True, exist_ok=True)
+
     # save colorized predictions
     colorized = args.dataset_cls.colorize_mask(pred)
-    colorized.save(os.path.join(args.save_dir, color_name))
+    colorized.save(color_path)
 
-    # save colorized predictions overlapped on original images
-    overlap = cv2.addWeighted(np.array(img), 0.5, np.array(colorized.convert('RGB')), 0.5, 0)
-    cv2.imwrite(os.path.join(args.save_dir, overlap_name), overlap[:, :, ::-1])
-
-    # save label-based predictions, e.g. for submission purpose
-    label_out = np.zeros_like(pred)
-    for label_id, train_id in args.dataset_cls.id_to_trainid.items():
-        label_out[np.where(pred == train_id)] = label_id
-        cv2.imwrite(os.path.join(args.save_dir, pred_name), label_out)
 end_time = time.time()
 
 print('Results saved.')
